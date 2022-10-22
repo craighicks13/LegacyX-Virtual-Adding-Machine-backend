@@ -1,79 +1,8 @@
 import express from 'express';
+import { db, connectToDb } from './db.js';
+import 'dotenv/config';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
-let journals = [
-	{
-		id: 1,
-		date: '10-08-2022',
-		active: true,
-		memo: 'The Hat Shop',
-		lineItems: [
-			{
-				id: 1,
-				account: '1060 Community Spirit Account',
-				debits: 400,
-				credits: 0,
-				description: '',
-				name: '',
-				sales_tax: 0,
-			},
-			{
-				id: 2,
-				account: '1080 Ways & Means Float',
-				debits: 400,
-				credits: 0,
-				description: '',
-				name: '',
-				sales_tax: 0,
-			},
-			{
-				id: 3,
-				account: '2100 Accounts Payable',
-				debits: 0,
-				credits: 800,
-				description: '',
-				name: '',
-				sales_tax: 0,
-			},
-		],
-	},
-	{
-		id: 2,
-		date: '10-09-2022',
-		active: true,
-		memo: "Dogs'r'us",
-		lineItems: [
-			{
-				id: 1,
-				account: '1200 Bones and Biskets',
-				debits: 200,
-				credits: 0,
-				description: '',
-				name: '',
-				sales_tax: 0,
-			},
-			{
-				id: 2,
-				account: '1080 Couch Repairs',
-				debits: 400,
-				credits: 0,
-				description: '',
-				name: '',
-				sales_tax: 0,
-			},
-			{
-				id: 3,
-				account: '2100 Show Winnings',
-				debits: 0,
-				credits: 600,
-				description: '',
-				name: '',
-				sales_tax: 0,
-			},
-		],
-	},
-];
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,69 +14,97 @@ app.use(express.static(path.join(__dirname, './build')));
 app.get(/^(?!\/api).+/, (req, res) => {
 	res.sendFile(path.join(__dirname, './build/index.html'));
 });
-
-//TODO: Log in user
-export async function logInUser(user, password) {
-	//Log in user
-}
-
-//TODO: Log out user
-export async function logOutUser() {
-	// Log out user
-}
-
-//TODO: Get entries for logged in user
-app.get('/api/journals', async (req, res) => {
-	res.send(journals);
-});
-
-// TODO: Add a new journal entry
-app.put('/api/journal/new', async (req, res) => {
-	const date = new Date();
-	const entry = {
-		id: journals.length + 1,
-		date: date.toLocaleDateString('en-GB').split('/').join('-'),
-		active: true,
-		memo: '',
-		lineItems: [],
-	};
-	journals.push(entry);
-	res.send(journals);
-});
-
-// TODO: Delete journal entry
-app.put('/api/journal/:id/delete', async (req, res) => {
-	const { id } = req.params;
-	const updateEntry = journals.find((a) => a.id == id);
-	updateEntry['active'] = false;
-	res.send(journals);
-});
-
-// TODO: Save entry
-app.post('/api/journal/:id/save', async (req, res) => {
-	const { id } = req.params;
-	const { entry } = req.body;
-
-	const updateEntry = journals.findIndex((a) => a.id == id);
-
-	if (updateEntry !== undefined) {
-		journals[updateEntry] = JSON.parse(entry);
+app.get('/api/journals/:uid', async (req, res) => {
+	const { uid } = req.params;
+	const journals = await db
+		.collection('entries')
+		.find({ active: true, uid: uid }, { id: 1, date: 1, memo: 1 })
+		.toArray();
+	if (journals) {
+		res.json(journals);
 	} else {
-		journals.push(JSON.parse(entry));
+		res.sendStatus(404);
+	}
+});
+
+app.post('/api/journal/:id/delete', async (req, res) => {
+	const { id } = req.params;
+	const { uid, entry_num } = req.body;
+
+	const entry = await db
+		.collection('entries')
+		.updateOne({ entry_num }, { $set: { active: false } });
+
+	if (entry.acknowledged) {
+		const journals = await db
+			.collection('entries')
+			.find({ active: true, uid: uid })
+			.toArray();
+		res.json(journals);
+	} else {
+		res.sendStatus(404);
+	}
+});
+
+app.post('/api/journal/:entry_num/save', async (req, res) => {
+	const { entry_num } = req.params;
+	const { entry, uid } = req.body;
+
+	let saveEntry = JSON.parse(entry);
+	let response, newEntry;
+
+	if (entry_num === 'new') {
+		newEntry = {
+			memo: saveEntry.memo,
+			date: saveEntry.date,
+			lineItems: saveEntry.lineItems,
+			active: true,
+			uid: uid,
+		};
+		newEntry.entry_num = (
+			(await db.collection('entries').count({})) + 1
+		).toString();
+		response = await db.collection('entries').insertOne(newEntry);
+	} else {
+		response = await db.collection('entries').updateOne(
+			{ entry_num },
+			{
+				$set: {
+					memo: saveEntry.memo,
+					lineItems: saveEntry.lineItems,
+				},
+			}
+		);
 	}
 
-	res.send('success');
+	if (response.acknowledged) {
+		if (entry_num === 'new') {
+			res.send({ status: 'success', new_id: newEntry.entry_num });
+		} else {
+			res.send({ status: 'success' });
+		}
+	} else {
+		res.sendStatus(500);
+	}
 });
 
-//TODO: Make sure user is logged in and has access to the requested entry
-app.get('/api/journal/:id/', async (req, res) => {
-	const { id } = req.params;
-	const journal = journals.find((a) => a.id == id);
-	res.send(journal);
+app.get('/api/journal/:entry_num/', async (req, res) => {
+	const { entry_num } = req.params;
+
+	const entry = await db.collection('entries').findOne({ entry_num });
+
+	if (entry) {
+		res.json(entry);
+	} else {
+		res.sendStatus(404);
+	}
 });
 
 const PORT = process.env.PORT || 8000;
 
-app.listen(PORT, () => {
-	console.log('Server is listening on port ' + PORT);
+connectToDb(() => {
+	console.log('Connected to database');
+	app.listen(PORT, () => {
+		console.log('Server is listening on port ' + PORT);
+	});
 });

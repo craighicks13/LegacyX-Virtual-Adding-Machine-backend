@@ -1,2 +1,4 @@
 node_modules
 *.yaml
+mongo-db-data
+.env
